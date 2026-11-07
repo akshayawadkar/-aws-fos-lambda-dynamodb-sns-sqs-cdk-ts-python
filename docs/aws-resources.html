@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FOS – AWS CDK Resource Reference</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2e3245;
+      --accent: #f90;
+      --accent2: #4fa3e0;
+      --green: #3ecf8e;
+      --red: #e05c5c;
+      --purple: #b57ef3;
+      --yellow: #f0c040;
+      --text: #e2e6f0;
+      --muted: #7a80a0;
+      --radius: 8px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; line-height: 1.6; }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 2rem 2.5rem 1.5rem;
+    }
+    header h1 { font-size: 1.75rem; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+    header p { color: var(--muted); margin-top: .4rem; font-size: .95rem; }
+
+    /* ── Layout ── */
+    main { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+    /* ── Section headers ── */
+    .stack-header {
+      display: flex; align-items: center; gap: .75rem;
+      margin: 2.5rem 0 1rem;
+    }
+    .stack-header h2 { font-size: 1.25rem; font-weight: 600; }
+    .stack-badge {
+      font-size: .7rem; font-weight: 700; letter-spacing: 1px;
+      padding: .2rem .55rem; border-radius: 99px; text-transform: uppercase;
+    }
+    .badge-messaging { background: #2a2040; color: var(--purple); border: 1px solid var(--purple); }
+    .badge-payment   { background: #1e2f20; color: var(--green);  border: 1px solid var(--green);  }
+    .badge-restaurant{ background: #2a2010; color: var(--yellow); border: 1px solid var(--yellow); }
+    .badge-order     { background: #1a2535; color: var(--accent2);border: 1px solid var(--accent2);}
+
+    .section-desc { color: var(--muted); font-size: .9rem; margin-bottom: 1.25rem; }
+
+    /* ── Resource cards grid ── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex; align-items: center; gap: .6rem;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-header .icon { font-size: 1.1rem; }
+    .card-header h3 { font-size: .95rem; font-weight: 600; }
+    .card-header .construct-id {
+      margin-left: auto;
+      font-family: var(--mono); font-size: .72rem;
+      color: var(--muted); background: #0f1117;
+      padding: .15rem .45rem; border-radius: 4px; border: 1px solid var(--border);
+    }
+    .card-body { padding: .75rem 1rem; }
+
+    /* ── Property table ── */
+    table { width: 100%; border-collapse: collapse; font-size: .855rem; }
+    th { color: var(--muted); font-weight: 600; text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border); }
+    td { padding: .3rem .5rem; vertical-align: top; border-bottom: 1px solid #1e2130; }
+    tr:last-child td { border-bottom: none; }
+    td:first-child { color: var(--muted); white-space: nowrap; }
+    td code {
+      font-family: var(--mono); font-size: .82rem;
+      background: #0f1117; padding: .1rem .35rem; border-radius: 3px;
+      color: var(--accent2);
+    }
+    td .tag {
+      display: inline-block; font-size: .7rem; font-weight: 700;
+      padding: .1rem .4rem; border-radius: 99px; margin: .1rem .15rem 0 0;
+    }
+    .tag-get    { background:#1e3020; color:#3ecf8e; }
+    .tag-post   { background:#1e2535; color:#4fa3e0; }
+    .tag-patch  { background:#2a2010; color:#f0c040; }
+    .tag-delete { background:#2a1515; color:#e05c5c; }
+
+    /* ── Divider ── */
+    hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0 0; }
+
+    /* ── Architecture note ── */
+    .arch-note {
+      background: var(--surface); border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius); padding: 1rem 1.25rem;
+      margin: 2rem 0; font-size: .9rem;
+    }
+    .arch-note strong { color: var(--accent); }
+
+    /* ── Footer ── */
+    footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 1.5rem; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ FOS – AWS CDK Resource Reference</h1>
+  <p>Auto-documented from <code>infra/infra/</code> · Region: <strong>us-east-2</strong> · Runtime: <strong>Python 3.14 · ARM_64</strong></p>
+</header>
+
+<main>
+
+  <div class="arch-note">
+    <strong>Architecture:</strong> Four CDK stacks make up the Food Ordering System (FOS).
+    <code>FosMessaging</code> is deployed first and exports the shared EventBridge bus and SQS queues.
+    <code>FosPayment</code>, <code>FosRestaurant</code>, and <code>FosOrder</code> each receive those references via stack props.
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       STACK 1 – MESSAGING
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="stack-header">
+    <span class="stack-badge badge-messaging">Stack</span>
+    <h2>FosMessaging</h2>
+  </div>
+  <p class="section-desc">Shared event bus, command queues, and routing rules. Deployed before service stacks.</p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🚌</span>
+        <h3>EventBridge Event Bus</h3>
+        <span class="construct-id">EventBus</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Type</td><td><code>aws_events.EventBus</code></td></tr>
+          <tr><td>Purpose</td><td>Custom bus; all service outbox publishers put events here</td></tr>
+          <tr><td>Consumers</td><td>PaymentStack, RestaurantStack, OrderStack (via Rule)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📐</span>
+        <h3>EventBridge Rule</h3>
+        <span class="construct-id">EventsToOrder</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Type</td><td><code>aws_events.Rule</code></td></tr>
+          <tr><td>Event Bus</td><td>EventBus (above)</td></tr>
+          <tr><td>Source filter</td><td><code>fos.payment</code>, <code>fos.restaurant</code></td></tr>
+          <tr><td>Target</td><td>OrderEvents SQS queue</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📬</span>
+        <h3>SQS Queue + DLQ</h3>
+        <span class="construct-id">PaymentCommands</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Encryption</td><td><code>SQS_MANAGED</code></td></tr>
+          <tr><td>Visibility timeout</td><td>180 s (6 × Lambda 30 s)</td></tr>
+          <tr><td>DLQ retention</td><td>14 days</td></tr>
+          <tr><td>Max receive count</td><td>5</td></tr>
+          <tr><td>DLQ alarm</td><td>≥ 1 message → CloudWatch Alarm</td></tr>
+          <tr><td>Consumer</td><td>FosPayment – Commands Lambda</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📬</span>
+        <h3>SQS Queue + DLQ</h3>
+        <span class="construct-id">RestaurantCommands</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Encryption</td><td><code>SQS_MANAGED</code></td></tr>
+          <tr><td>Visibility timeout</td><td>180 s</td></tr>
+          <tr><td>DLQ retention</td><td>14 days</td></tr>
+          <tr><td>Max receive count</td><td>5</td></tr>
+          <tr><td>DLQ alarm</td><td>≥ 1 message → CloudWatch Alarm</td></tr>
+          <tr><td>Consumer</td><td>FosRestaurant – Commands Lambda</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📬</span>
+        <h3>SQS Queue + DLQ</h3>
+        <span class="construct-id">OrderEvents</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Encryption</td><td><code>SQS_MANAGED</code></td></tr>
+          <tr><td>Visibility timeout</td><td>180 s</td></tr>
+          <tr><td>DLQ retention</td><td>14 days</td></tr>
+          <tr><td>Max receive count</td><td>5</td></tr>
+          <tr><td>DLQ alarm</td><td>≥ 1 message → CloudWatch Alarm</td></tr>
+          <tr><td>Consumer</td><td>FosOrder – Orchestrator Lambda</td></tr>
+          <tr><td>Source</td><td>EventsToOrder Rule (fos.payment + fos.restaurant)</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <hr/>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       STACK 2 – PAYMENT
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="stack-header">
+    <span class="stack-badge badge-payment">Stack</span>
+    <h2>FosPayment</h2>
+  </div>
+  <p class="section-desc">Payment account management service. Source: <code>services/payment</code></p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🗄️</span>
+        <h3>DynamoDB Table</h3>
+        <span class="construct-id">Table</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Partition key</td><td><code>PK</code> (STRING)</td></tr>
+          <tr><td>Sort key</td><td><code>SK</code> (STRING)</td></tr>
+          <tr><td>Billing mode</td><td>PAY_PER_REQUEST</td></tr>
+          <tr><td>Stream</td><td>NEW_IMAGE</td></tr>
+          <tr><td>TTL attribute</td><td><code>expiresAt</code></td></tr>
+          <tr><td>Removal policy</td><td>DESTROY</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📦</span>
+        <h3>Lambda Layer</h3>
+        <span class="construct-id">SharedLayer</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Source</td><td><code>packages/shared</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14</td></tr>
+          <tr><td>Architecture</td><td>ARM_64</td></tr>
+          <tr><td>Bundling</td><td>Local pip (manylinux ARM), Docker fallback</td></tr>
+          <tr><td>Contents</td><td>pip deps + <code>fos_shared/</code> package</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">Commands</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_payment.commands.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code></td></tr>
+          <tr><td>Trigger</td><td>SQS – PaymentCommands (batch 10, partial batch)</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">ApiFunction</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_payment.api.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code></td></tr>
+          <tr><td>Trigger</td><td>HTTP API integration</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🌐</span>
+        <h3>HTTP API (API Gateway v2)</h3>
+        <span class="construct-id">Api</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Method</th><th>Route</th></tr>
+          <tr><td><span class="tag tag-post">POST</span></td><td><code>/accounts</code></td></tr>
+          <tr><td><span class="tag tag-get">GET</span></td><td><code>/accounts/{accountId}</code></td></tr>
+          <tr><td><span class="tag tag-post">POST</span></td><td><code>/accounts/{accountId}/credit</code></td></tr>
+          <tr><td><span class="tag tag-get">GET</span></td><td><code>/accounts/{accountId}/ledger</code></td></tr>
+        </table>
+        <p style="margin-top:.6rem; font-size:.82rem; color:var(--muted)">Endpoint URL exported as <code>ApiUrl</code> CfnOutput.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📤</span>
+        <h3>Outbox Publisher</h3>
+        <span class="construct-id">Outbox</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Type</td><td>Custom Construct</td></tr>
+          <tr><td>Trigger</td><td>DynamoDB Stream on Table (NEW_IMAGE)</td></tr>
+          <tr><td>Filter</td><td>INSERT events where <code>PK</code> begins with <code>OUTBOX#</code></td></tr>
+          <tr><td>Starting pos.</td><td>LATEST</td></tr>
+          <tr><td>Batch size</td><td>10</td></tr>
+          <tr><td>Retry attempts</td><td>10</td></tr>
+          <tr><td>Bisect on error</td><td>Yes</td></tr>
+          <tr><td>Failure dest.</td><td>FailureQueue (SQS, 14-day retention) + CloudWatch Alarm</td></tr>
+          <tr><td>Publishes to</td><td>EventBus (EventBridge)</td></tr>
+          <tr><td>IAM</td><td><code>events:PutEvents</code> on EventBus</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <hr/>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       STACK 3 – RESTAURANT
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="stack-header">
+    <span class="stack-badge badge-restaurant">Stack</span>
+    <h2>FosRestaurant</h2>
+  </div>
+  <p class="section-desc">Restaurant and product catalogue management service. Source: <code>services/restaurant</code></p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🗄️</span>
+        <h3>DynamoDB Table</h3>
+        <span class="construct-id">Table</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Partition key</td><td><code>PK</code> (STRING)</td></tr>
+          <tr><td>Sort key</td><td><code>SK</code> (STRING)</td></tr>
+          <tr><td>Billing mode</td><td>PAY_PER_REQUEST</td></tr>
+          <tr><td>Stream</td><td>NEW_IMAGE</td></tr>
+          <tr><td>TTL attribute</td><td><code>expiresAt</code></td></tr>
+          <tr><td>Removal policy</td><td>DESTROY</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📦</span>
+        <h3>Lambda Layer</h3>
+        <span class="construct-id">SharedLayer</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Source</td><td><code>packages/shared</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Bundling</td><td>Local pip (manylinux ARM), Docker fallback</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">Commands</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_restaurant.commands.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code></td></tr>
+          <tr><td>Trigger</td><td>SQS – RestaurantCommands (batch 10, partial batch)</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">ApiFunction</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_restaurant.api.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code></td></tr>
+          <tr><td>Trigger</td><td>HTTP API integration</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🌐</span>
+        <h3>HTTP API (API Gateway v2)</h3>
+        <span class="construct-id">Api</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Method</th><th>Route</th></tr>
+          <tr><td><span class="tag tag-post">POST</span></td><td><code>/restaurants</code></td></tr>
+          <tr><td><span class="tag tag-patch">PATCH</span></td><td><code>/restaurants/{restaurantId}</code></td></tr>
+          <tr><td><span class="tag tag-post">POST</span></td><td><code>/restaurants/{restaurantId}/products</code></td></tr>
+          <tr><td><span class="tag tag-patch">PATCH</span></td><td><code>/restaurants/{restaurantId}/products/{productId}</code></td></tr>
+        </table>
+        <p style="margin-top:.6rem; font-size:.82rem; color:var(--muted)">Endpoint URL exported as <code>ApiUrl</code> CfnOutput.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📤</span>
+        <h3>Outbox Publisher</h3>
+        <span class="construct-id">Outbox</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Trigger</td><td>DynamoDB Stream on Table</td></tr>
+          <tr><td>Filter</td><td>INSERT where <code>PK</code> begins with <code>OUTBOX#</code></td></tr>
+          <tr><td>Batch size</td><td>10 · Retry 10 · Bisect on error</td></tr>
+          <tr><td>Failure dest.</td><td>FailureQueue + CloudWatch Alarm</td></tr>
+          <tr><td>Publishes to</td><td>EventBus (EventBridge)</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <hr/>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       STACK 4 – ORDER
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="stack-header">
+    <span class="stack-badge badge-order">Stack</span>
+    <h2>FosOrder</h2>
+  </div>
+  <p class="section-desc">Order lifecycle orchestration. Source: <code>services/order</code></p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🗄️</span>
+        <h3>DynamoDB Table</h3>
+        <span class="construct-id">Table</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Partition key</td><td><code>PK</code> (STRING)</td></tr>
+          <tr><td>Sort key</td><td><code>SK</code> (STRING)</td></tr>
+          <tr><td>Billing mode</td><td>PAY_PER_REQUEST</td></tr>
+          <tr><td>Stream</td><td>NEW_IMAGE</td></tr>
+          <tr><td>TTL attribute</td><td><code>expiresAt</code></td></tr>
+          <tr><td>Removal policy</td><td>DESTROY</td></tr>
+          <tr><td>GSI</td><td><code>ActiveOrders</code> — PK: <code>sweepPk</code> SK: <code>sweepSk</code> (sparse; only in-progress orders)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📦</span>
+        <h3>Lambda Layer</h3>
+        <span class="construct-id">SharedLayer</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Source</td><td><code>packages/shared</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Bundling</td><td>Local pip (manylinux ARM), Docker fallback</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">Orchestrator</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_order.events.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code></td></tr>
+          <tr><td>Trigger</td><td>SQS – OrderEvents (batch 10, partial batch)</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">λ</span>
+        <h3>Lambda Function</h3>
+        <span class="construct-id">ApiFunction</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Handler</td><td><code>fos_order.api.handler</code></td></tr>
+          <tr><td>Runtime</td><td>Python 3.14 · ARM_64</td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Env vars</td><td><code>TABLE_NAME</code>, <code>MAX_ITEMS_PER_ORDER=10</code></td></tr>
+          <tr><td>Trigger</td><td>HTTP API integration</td></tr>
+          <tr><td>IAM</td><td>DynamoDB read/write on Table</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">🌐</span>
+        <h3>HTTP API (API Gateway v2)</h3>
+        <span class="construct-id">Api</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Method</th><th>Route</th></tr>
+          <tr><td><span class="tag tag-post">POST</span></td><td><code>/orders</code></td></tr>
+          <tr><td><span class="tag tag-get">GET</span></td><td><code>/orders/{orderId}</code></td></tr>
+        </table>
+        <p style="margin-top:.6rem; font-size:.82rem; color:var(--muted)">Endpoint URL exported as <code>ApiUrl</code> CfnOutput.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📤</span>
+        <h3>Outbox Publisher</h3>
+        <span class="construct-id">Outbox</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Trigger</td><td>DynamoDB Stream on Table</td></tr>
+          <tr><td>Filter</td><td>INSERT where <code>PK</code> begins with <code>OUTBOX#</code></td></tr>
+          <tr><td>Batch size</td><td>10 · Retry 10 · Bisect on error</td></tr>
+          <tr><td>Failure dest.</td><td>FailureQueue + CloudWatch Alarm</td></tr>
+          <tr><td>Publishes to</td><td>EventBus (EventBridge)</td></tr>
+          <tr><td>Command queues</td><td><code>PAYMENT_COMMANDS_QUEUE_URL</code> → PaymentCommands<br/><code>RESTAURANT_COMMANDS_QUEUE_URL</code> → RestaurantCommands</td></tr>
+          <tr><td>IAM</td><td><code>events:PutEvents</code> + <code>sqs:SendMessage</code> on both queues</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <hr/>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SHARED COMPONENTS REFERENCE
+  ═══════════════════════════════════════════════════════════════ -->
+  <div class="stack-header">
+    <span class="stack-badge" style="background:#1a1d27;color:#7a80a0;border:1px solid #2e3245;">Shared</span>
+    <h2>Shared Component Defaults</h2>
+  </div>
+  <p class="section-desc">Defined in <code>infra/infra/components.py</code> — applied uniformly across all service stacks.</p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">⚙️</span>
+        <h3>Lambda Defaults</h3>
+        <span class="construct-id">service_function()</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Runtime</td><td><code>PYTHON_3_14</code></td></tr>
+          <tr><td>Architecture</td><td><code>ARM_64</code></td></tr>
+          <tr><td>Memory</td><td>256 MB</td></tr>
+          <tr><td>Timeout</td><td>30 s</td></tr>
+          <tr><td>Excludes</td><td><code>tests/</code>, <code>__pycache__/</code>, <code>*.pyc</code>, <code>.pytest_cache/</code>, <code>.mypy_cache/</code></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">⚙️</span>
+        <h3>DynamoDB Table Defaults</h3>
+        <span class="construct-id">service_table()</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Key schema</td><td><code>PK</code> (HASH) / <code>SK</code> (RANGE)</td></tr>
+          <tr><td>Billing</td><td>PAY_PER_REQUEST</td></tr>
+          <tr><td>Stream</td><td>NEW_IMAGE</td></tr>
+          <tr><td>TTL</td><td><code>expiresAt</code></td></tr>
+          <tr><td>Removal</td><td>DESTROY (learning stack)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">⚙️</span>
+        <h3>SQS Queue Defaults</h3>
+        <span class="construct-id">queue_with_dlq()</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Encryption</td><td>SQS_MANAGED (queue + DLQ)</td></tr>
+          <tr><td>Visibility timeout</td><td>180 s (6 × 30 s Lambda)</td></tr>
+          <tr><td>DLQ retention</td><td>14 days</td></tr>
+          <tr><td>Max receive count</td><td>5</td></tr>
+          <tr><td>DLQ alarm threshold</td><td>1 visible message (Max, 1-min period)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">⚙️</span>
+        <h3>SQS Consumer Defaults</h3>
+        <span class="construct-id">consume_queue()</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Batch size</td><td>10</td></tr>
+          <tr><td>Partial batch resp.</td><td>Yes (<code>report_batch_item_failures=True</code>)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">⚙️</span>
+        <h3>CloudWatch DLQ Alarm Defaults</h3>
+        <span class="construct-id">dlq_alarm()</span>
+      </div>
+      <div class="card-body">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Metric</td><td>ApproximateNumberOfMessagesVisible</td></tr>
+          <tr><td>Period</td><td>1 minute</td></tr>
+          <tr><td>Statistic</td><td>Maximum</td></tr>
+          <tr><td>Threshold</td><td>1</td></tr>
+          <tr><td>Evaluation periods</td><td>1</td></tr>
+          <tr><td>Missing data</td><td>NOT_BREACHING</td></tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<footer>Generated from <code>infra/infra/</code> · FOS CDK Infrastructure · Region us-east-2</footer>
+
+</body>
+</html>
