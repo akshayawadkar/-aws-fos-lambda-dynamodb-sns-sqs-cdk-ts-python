@@ -22,7 +22,7 @@ RUNTIME = lambda_.Runtime.PYTHON_3_14
 ARCHITECTURE = lambda_.Architecture.ARM_64
 PYTHON_VERSION = "3.14"
 SOURCE_EXCLUDES = ["tests", "__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache"]
-SHARED_DIR = REPO_ROOT / "shared"
+SHARED_DIR = REPO_ROOT / "infra" / "shared"
 
 
 @jsii.implements(ILocalBundling)
@@ -172,7 +172,7 @@ class OutboxPublisher(Construct):
         fn = service_function(
             self,
             "Function",
-            "packages/shared",
+            "infra/shared",
             "fos_share.outbox_publisher.handler",
             layer,
             {
@@ -191,7 +191,7 @@ class OutboxPublisher(Construct):
             encryption=sqs.QueueEncryption.SQS_MANAGED
         )
 
-        dlq_alarm(self, "FailureQueue", failures)
+        dlq_alarm(self, "FailureQueueAlarm", failures)
 
         fn.add_event_source(
             DynamoEventSource(

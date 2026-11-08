@@ -8,9 +8,9 @@ from typing import Any
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
 
-from contracts import COMMAND_QUEUE_ENV
-from dynamo import plain
-from log import log
+from .contracts import COMMAND_QUEUE_ENV
+from .dynamo import plain
+from .log import log
 
 _deserializer = TypeDeserializer()
 

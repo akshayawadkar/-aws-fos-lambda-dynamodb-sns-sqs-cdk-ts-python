@@ -8,7 +8,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from contracts import COMMAND_QUEUE_ENV, Message, to_wire
+from .contracts import COMMAND_QUEUE_ENV, Message, to_wire
 
 TransactItem = dict[str, Any]
 

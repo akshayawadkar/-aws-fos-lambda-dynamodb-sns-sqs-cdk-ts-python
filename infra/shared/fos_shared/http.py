@@ -5,8 +5,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from dynamo import plain
-from log import log
+from .dynamo import plain
+from .log import log
 
 ApiEvent = dict[str, Any]
 Route = Callable[[ApiEvent], tuple[int, Any]]

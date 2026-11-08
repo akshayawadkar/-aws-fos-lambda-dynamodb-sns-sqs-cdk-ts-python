@@ -2,8 +2,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from contracts import Message, parse_message
-from log import log
+from .contracts import Message, parse_message
+from .log import log
 
 
 def parse_sqs_body(body: str) -> Message:
