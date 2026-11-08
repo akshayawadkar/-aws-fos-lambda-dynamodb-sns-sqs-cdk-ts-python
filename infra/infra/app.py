@@ -12,7 +12,7 @@ from .restaurant_stack import RestaurantStack
 class Stacks:
     messaging: MessagingStack
     payment: PaymentStack | None = None
-    # restaurant: RestaurantStack | None = None
+    restaurant: RestaurantStack | None = None
     # order: OrderStack | None = None
 
 
@@ -21,6 +21,6 @@ def build_stacks(app: App, env: Environment) -> Stacks:
     return Stacks(
         messaging=messaging,
         payment=PaymentStack(app, "FosPayment", env=env, messaging=messaging),
-        # restaurant=RestaurantStack(app, "FosRestaurant", env=env, messaging=messaging),
+        restaurant=RestaurantStack(app, "FosRestaurant", env=env, messaging=messaging),
         # order=OrderStack(app, "FosOrder", env=env, messaging=messaging),
     )

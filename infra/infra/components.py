@@ -173,7 +173,7 @@ class OutboxPublisher(Construct):
             self,
             "Function",
             "infra/shared",
-            "fos_share.outbox_publisher.handler",
+            "fos_shared.outbox_publisher.handler",
             layer,
             {
                 "EVENT_BUS_NAME": event_bus.event_bus_name,

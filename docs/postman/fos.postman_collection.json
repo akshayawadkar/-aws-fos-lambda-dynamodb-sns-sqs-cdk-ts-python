@@ -1,0 +1,1066 @@
+{
+  "info": {
+    "name": "FOS – Food Ordering APIs",
+    "description": "HTTP APIs of the deployed FOS services (us-east-2). Run with the Collection Runner, or request by request from the top: create requests save `accountId`, `restaurantId` and `productId` for the ones after them.\n\nAmounts are integer minor units (cents): 1450 = $14.50.\n\nThe URL variables come from each stack's `ApiUrl` output and change if a stack is destroyed and redeployed:\n`aws cloudformation describe-stacks --stack-name FosPayment --region us-east-2 --query \"Stacks[0].Outputs\"`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "paymentUrl",
+      "value": "https://jqq85fsgqd.execute-api.us-east-2.amazonaws.com"
+    },
+    {
+      "key": "restaurantUrl",
+      "value": "https://ov5aeaff1b.execute-api.us-east-2.amazonaws.com"
+    },
+    {
+      "key": "accountId",
+      "value": ""
+    },
+    {
+      "key": "referenceId",
+      "value": ""
+    },
+    {
+      "key": "creditAmount",
+      "value": "5000"
+    },
+    {
+      "key": "restaurantId",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Payment",
+      "description": "FosPayment HTTP API. Amounts are integer minor units (cents).",
+      "item": [
+        {
+          "name": "Create account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('ACTIVE, zero USD balance', () => {",
+                  "    pm.expect(body.status).to.eql('ACTIVE');",
+                  "    pm.expect(body.balanceMinor).to.eql(0);",
+                  "    pm.expect(body.currency).to.eql('USD');",
+                  "});",
+                  "pm.collectionVariables.set('accountId', body.accountId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ada Lovelace\"\n}"
+            },
+            "description": "Creates an ACTIVE USD account with balance 0 and saves `accountId`."
+          }
+        },
+        {
+          "name": "Get account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('returns the saved account', () => pm.expect(pm.response.json().accountId).to.eql(pm.collectionVariables.get('accountId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Credit account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh referenceId per run. The duplicate request below reuses it.",
+                  "pm.collectionVariables.set('referenceId', 'topup-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('applied, with a ledger entry', () => {",
+                  "    pm.expect(body.duplicate).to.eql(false);",
+                  "    pm.expect(body.entryId).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts/{{accountId}}/credit",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "credit"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountMinor\": {{creditAmount}},\n  \"referenceId\": \"{{referenceId}}\"\n}"
+            },
+            "description": "Tops up the account. `referenceId` makes retries safe: each reference is applied once."
+          }
+        },
+        {
+          "name": "Credit account (duplicate referenceId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('flagged as duplicate', () => pm.expect(pm.response.json().duplicate).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts/{{accountId}}/credit",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "credit"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountMinor\": {{creditAmount}},\n  \"referenceId\": \"{{referenceId}}\"\n}"
+            },
+            "description": "Replays the previous top-up. Expect `duplicate: true` and no balance change."
+          }
+        },
+        {
+          "name": "Get account (balance after credit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('credited exactly once', () => pm.expect(pm.response.json().balanceMinor).to.eql(Number(pm.collectionVariables.get('creditAmount'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts/{{accountId}}",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get ledger",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('one CREDIT entry', () => pm.expect(pm.response.json().entries.filter(e => e.type === 'CREDIT')).to.have.lengthOf(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paymentUrl}}/accounts/{{accountId}}/ledger",
+              "host": [
+                "{{paymentUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{accountId}}",
+                "ledger"
+              ]
+            },
+            "description": "Up to 50 ledger entries, newest first."
+          }
+        },
+        {
+          "name": "Errors",
+          "item": [
+            {
+              "name": "Get unknown account → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/does-not-exist",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "does-not-exist"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Credit unknown account → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/does-not-exist/credit",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "does-not-exist",
+                    "credit"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amountMinor\": 100,\n  \"referenceId\": \"{{$guid}}\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Create account with empty name → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Credit negative amount → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}/credit",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}",
+                    "credit"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amountMinor\": -100,\n  \"referenceId\": \"{{$guid}}\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Credit with invalid JSON → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}/credit",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}",
+                    "credit"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{ not json"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Restaurant",
+      "description": "FosRestaurant HTTP API. There are no GET routes, so each write returns the full item.\n\nCreating or updating a product publishes a `ProductChanged` event (fos.restaurant) to the bus, which routes it to the OrderEvents queue.",
+      "item": [
+        {
+          "name": "Create restaurant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('OPEN by default', () => pm.expect(body.status).to.eql('OPEN'));",
+                  "pm.collectionVariables.set('restaurantId', body.restaurantId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pasta Place\"\n}"
+            },
+            "description": "Creates a restaurant (status defaults to OPEN) and saves `restaurantId`."
+          }
+        },
+        {
+          "name": "Close restaurant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('now CLOSED', () => pm.expect(pm.response.json().status).to.eql('CLOSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"CLOSED\"\n}"
+            },
+            "description": "While CLOSED, ConfirmOrder commands are rejected with RESTAURANT_CLOSED."
+          }
+        },
+        {
+          "name": "Rename and reopen restaurant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('renamed and OPEN', () => {",
+                  "    pm.expect(body.name).to.eql('Pasta Place Downtown');",
+                  "    pm.expect(body.status).to.eql('OPEN');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pasta Place Downtown\",\n  \"status\": \"OPEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('version 1, available', () => {",
+                  "    pm.expect(body.version).to.eql(1);",
+                  "    pm.expect(body.available).to.eql(true);",
+                  "    pm.expect(body.restaurantId).to.eql(pm.collectionVariables.get('restaurantId'));",
+                  "});",
+                  "pm.collectionVariables.set('productId', body.productId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}",
+                "products"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Spaghetti Carbonara\",\n  \"priceMinor\": 1450,\n  \"available\": true\n}"
+            },
+            "description": "Adds a product ($14.50) and saves `productId`. Publishes ProductChanged v1."
+          }
+        },
+        {
+          "name": "Change product price",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('price updated, version 2', () => {",
+                  "    pm.expect(body.priceMinor).to.eql(1595);",
+                  "    pm.expect(body.version).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"priceMinor\": 1595\n}"
+            },
+            "description": "Each update bumps `version` and publishes ProductChanged, so consumers can ignore stale events."
+          }
+        },
+        {
+          "name": "Mark product unavailable",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('unavailable, version 3', () => {",
+                  "    pm.expect(body.available).to.eql(false);",
+                  "    pm.expect(body.version).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"available\": false\n}"
+            },
+            "description": "Orders containing this product are now rejected with PRODUCT_UNAVAILABLE."
+          }
+        },
+        {
+          "name": "Mark product available again",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('available, version 4', () => pm.expect(pm.response.json().version).to.eql(4));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+              "host": [
+                "{{restaurantUrl}}"
+              ],
+              "path": [
+                "restaurants",
+                "{{restaurantId}}",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"available\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Errors",
+          "item": [
+            {
+              "name": "Update unknown restaurant → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/does-not-exist",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "does-not-exist"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"CLOSED\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Add product to unknown restaurant → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/does-not-exist/products",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "does-not-exist",
+                    "products"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Ghost Dish\",\n  \"priceMinor\": 100\n}"
+                }
+              }
+            },
+            {
+              "name": "Update unknown product → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/does-not-exist",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products",
+                    "does-not-exist"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"priceMinor\": 100\n}"
+                }
+              }
+            },
+            {
+              "name": "Create restaurant with empty name → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Invalid restaurant status → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"PAUSED\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Empty restaurant update → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                },
+                "description": "At least one of name or status is required."
+              }
+            },
+            {
+              "name": "Zero product price → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Free Lunch\",\n  \"priceMinor\": 0\n}"
+                }
+              }
+            },
+            {
+              "name": "Non-boolean available → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products",
+                    "{{productId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"available\": \"yes\"\n}"
+                },
+                "description": "`available` is a strict boolean."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
