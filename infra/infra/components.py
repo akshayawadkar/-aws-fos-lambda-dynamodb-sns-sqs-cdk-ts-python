@@ -22,7 +22,7 @@ RUNTIME = lambda_.Runtime.PYTHON_3_14
 ARCHITECTURE = lambda_.Architecture.ARM_64
 PYTHON_VERSION = "3.14"
 SOURCE_EXCLUDES = ["tests", "__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache"]
-SHARED_DIR = REPO_ROOT / "packages" / "shared"
+SHARED_DIR = REPO_ROOT / "shared"
 
 
 @jsii.implements(ILocalBundling)
