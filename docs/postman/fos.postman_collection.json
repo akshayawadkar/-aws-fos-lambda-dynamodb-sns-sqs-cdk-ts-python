@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "FOS – Food Ordering APIs",
-    "description": "HTTP APIs of the deployed FOS services (us-east-2). Run with the Collection Runner, or request by request from the top: create requests save `accountId`, `restaurantId` and `productId` for the ones after them.\n\nAmounts are integer minor units (cents): 1450 = $14.50.\n\nThe URL variables come from each stack's `ApiUrl` output and change if a stack is destroyed and redeployed:\n`aws cloudformation describe-stacks --stack-name FosPayment --region us-east-2 --query \"Stacks[0].Outputs\"`",
+    "description": "HTTP APIs of the deployed FOS services (us-east-2). Run with the Collection Runner, or request by request from the top: create requests save `accountId`, `restaurantId`, `productId` and `orderId` for the ones after them. The Order folder runs the full saga and needs the Collection Runner.\n\nAmounts are integer minor units (cents): 1450 = $14.50.\n\nThe URL variables come from each stack's `ApiUrl` output and change if a stack is destroyed and redeployed:\n`aws cloudformation describe-stacks --stack-name FosPayment --region us-east-2 --query \"Stacks[0].Outputs\"`",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -12,6 +12,10 @@
     {
       "key": "restaurantUrl",
       "value": "https://ov5aeaff1b.execute-api.us-east-2.amazonaws.com"
+    },
+    {
+      "key": "orderUrl",
+      "value": "https://jjdvbcmwsc.execute-api.us-east-2.amazonaws.com"
     },
     {
       "key": "accountId",
@@ -32,6 +36,18 @@
     {
       "key": "productId",
       "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "pollCount",
+      "value": "0"
+    },
+    {
+      "key": "catalogRetries",
+      "value": "0"
     }
   ],
   "item": [
@@ -1056,6 +1072,804 @@
                   "raw": "{\n  \"available\": \"yes\"\n}"
                 },
                 "description": "`available` is a strict boolean."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Order (end-to-end saga)",
+      "description": "Runs the whole saga across all four stacks. **Use the Collection Runner on this folder**: it relies on `setNextRequest` to retry and poll. It creates its own account (balance 5000), restaurant and product (1450), so it doesn't depend on the other folders.\n\nFlow: `POST /orders` → DebitPayment → PaymentCompleted → ConfirmOrder → RestaurantConfirmed → CONFIRMED. A rejection sends RefundPayment and ends CANCELLED; a failed debit ends FAILED.\n\nRequires the outbox fix to be deployed to FosPayment and FosRestaurant.",
+      "item": [
+        {
+          "name": "Setup",
+          "item": [
+            {
+              "name": "Create account",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "pm.collectionVariables.set('accountId', pm.response.json().accountId);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Saga Tester\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Credit 5000",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}/credit",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}",
+                    "credit"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amountMinor\": 5000,\n  \"referenceId\": \"{{$guid}}\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Create restaurant",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "pm.collectionVariables.set('restaurantId', pm.response.json().restaurantId);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Saga Bistro\"\n}"
+                }
+              }
+            },
+            {
+              "name": "Create product (1450)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "pm.collectionVariables.set('productId', pm.response.json().productId);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Lasagne\",\n  \"priceMinor\": 1450,\n  \"available\": true\n}"
+                },
+                "description": "Publishes ProductChanged, which fills Order's catalog copy a few seconds later."
+              }
+            }
+          ]
+        },
+        {
+          "name": "1. Happy path → CONFIRMED",
+          "item": [
+            {
+              "name": "Create order (2 × 1450)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// Order prices from its own catalog copy, filled asynchronously by ProductChanged.",
+                      "// Until that event lands, the product is unknown (422): wait and retry.",
+                      "const tries = Number(pm.collectionVariables.get('catalogRetries') || 0);",
+                      "if (pm.response.code === 422 && tries < 10) {",
+                      "    pm.collectionVariables.set('catalogRetries', tries + 1);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('catalogRetries', 0);",
+                      "    pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                      "    const body = pm.response.json();",
+                      "    pm.test('PAYMENT_PENDING, total 2900', () => {",
+                      "        pm.expect(body.status).to.eql('PAYMENT_PENDING');",
+                      "        pm.expect(body.totalMinor).to.eql(2900);",
+                      "    });",
+                      "    pm.collectionVariables.set('orderId', body.trackingId);",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"{{productId}}\", \"quantity\": 2 }]\n}"
+                },
+                "description": "Returns 202 with a `trackingId`: the saga runs asynchronously."
+              }
+            },
+            {
+              "name": "Poll order until CONFIRMED",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const order = pm.response.json();",
+                      "const tries = Number(pm.collectionVariables.get('pollCount') || 0);",
+                      "if (!['CONFIRMED', 'FAILED', 'CANCELLED'].includes(order.status) && tries < 15) {",
+                      "    pm.collectionVariables.set('pollCount', tries + 1);",
+                      "    console.log(`order ${order.trackingId} is ${order.status}, polling again (${tries + 1})`);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('pollCount', 0);",
+                      "    pm.test('order ends CONFIRMED', () => pm.expect(order.status).to.eql('CONFIRMED'));",
+                      "    pm.test('steps: PAYMENT_PENDING → RESTAURANT_PENDING → CONFIRMED', () => pm.expect(order.steps.map(s => s.status)).to.eql([\"PAYMENT_PENDING\", \"RESTAURANT_PENDING\", \"CONFIRMED\"]));",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{orderUrl}}/orders/{{orderId}}",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders",
+                    "{{orderId}}"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Balance is 2100 (5000 − 2900)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('balance is 2100', () => pm.expect(pm.response.json().balanceMinor).to.eql(2100));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Restaurant rejects → refund → CANCELLED",
+          "item": [
+            {
+              "name": "Mark product unavailable",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products",
+                    "{{productId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"available\": false\n}"
+                }
+              }
+            },
+            {
+              "name": "Create order (1 × 1450)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// Order prices from its own catalog copy, filled asynchronously by ProductChanged.",
+                      "// Until that event lands, the product is unknown (422): wait and retry.",
+                      "const tries = Number(pm.collectionVariables.get('catalogRetries') || 0);",
+                      "if (pm.response.code === 422 && tries < 10) {",
+                      "    pm.collectionVariables.set('catalogRetries', tries + 1);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('catalogRetries', 0);",
+                      "    pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                      "    const body = pm.response.json();",
+                      "    pm.test('PAYMENT_PENDING, total 1450', () => {",
+                      "        pm.expect(body.status).to.eql('PAYMENT_PENDING');",
+                      "        pm.expect(body.totalMinor).to.eql(1450);",
+                      "    });",
+                      "    pm.collectionVariables.set('orderId', body.trackingId);",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"{{productId}}\", \"quantity\": 1 }]\n}"
+                },
+                "description": "Payment debits it, then the restaurant rejects with PRODUCT_UNAVAILABLE."
+              }
+            },
+            {
+              "name": "Poll order until CANCELLED",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const order = pm.response.json();",
+                      "const tries = Number(pm.collectionVariables.get('pollCount') || 0);",
+                      "if (!['CONFIRMED', 'FAILED', 'CANCELLED'].includes(order.status) && tries < 15) {",
+                      "    pm.collectionVariables.set('pollCount', tries + 1);",
+                      "    console.log(`order ${order.trackingId} is ${order.status}, polling again (${tries + 1})`);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('pollCount', 0);",
+                      "    pm.test('order ends CANCELLED', () => pm.expect(order.status).to.eql('CANCELLED'));",
+                      "    pm.test('steps: PAYMENT_PENDING → RESTAURANT_PENDING → REFUND_PENDING → CANCELLED', () => pm.expect(order.steps.map(s => s.status)).to.eql([\"PAYMENT_PENDING\", \"RESTAURANT_PENDING\", \"REFUND_PENDING\", \"CANCELLED\"]));",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{orderUrl}}/orders/{{orderId}}",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders",
+                    "{{orderId}}"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Balance back to 2100 (refunded)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('balance is 2100', () => pm.expect(pm.response.json().balanceMinor).to.eql(2100));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Mark product available again",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{restaurantUrl}}/restaurants/{{restaurantId}}/products/{{productId}}",
+                  "host": [
+                    "{{restaurantUrl}}"
+                  ],
+                  "path": [
+                    "restaurants",
+                    "{{restaurantId}}",
+                    "products",
+                    "{{productId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"available\": true\n}"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Insufficient funds → FAILED",
+          "item": [
+            {
+              "name": "Create order (10 × 1450 = 14500)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// Order prices from its own catalog copy, filled asynchronously by ProductChanged.",
+                      "// Until that event lands, the product is unknown (422): wait and retry.",
+                      "const tries = Number(pm.collectionVariables.get('catalogRetries') || 0);",
+                      "if (pm.response.code === 422 && tries < 10) {",
+                      "    pm.collectionVariables.set('catalogRetries', tries + 1);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('catalogRetries', 0);",
+                      "    pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                      "    const body = pm.response.json();",
+                      "    pm.test('PAYMENT_PENDING, total 14500', () => {",
+                      "        pm.expect(body.status).to.eql('PAYMENT_PENDING');",
+                      "        pm.expect(body.totalMinor).to.eql(14500);",
+                      "    });",
+                      "    pm.collectionVariables.set('orderId', body.trackingId);",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"{{productId}}\", \"quantity\": 10 }]\n}"
+                },
+                "description": "More than the 2100 balance."
+              }
+            },
+            {
+              "name": "Poll order until FAILED",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const order = pm.response.json();",
+                      "const tries = Number(pm.collectionVariables.get('pollCount') || 0);",
+                      "if (!['CONFIRMED', 'FAILED', 'CANCELLED'].includes(order.status) && tries < 15) {",
+                      "    pm.collectionVariables.set('pollCount', tries + 1);",
+                      "    console.log(`order ${order.trackingId} is ${order.status}, polling again (${tries + 1})`);",
+                      "    setTimeout(() => {}, 2000);",
+                      "    postman.setNextRequest(pm.info.requestName);",
+                      "} else {",
+                      "    pm.collectionVariables.set('pollCount', 0);",
+                      "    pm.test('order ends FAILED', () => pm.expect(order.status).to.eql('FAILED'));",
+                      "    pm.test('steps: PAYMENT_PENDING → FAILED', () => pm.expect(order.steps.map(s => s.status)).to.eql([\"PAYMENT_PENDING\", \"FAILED\"]));",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{orderUrl}}/orders/{{orderId}}",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders",
+                    "{{orderId}}"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Balance still 2100",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('balance is 2100', () => pm.expect(pm.response.json().balanceMinor).to.eql(2100));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{paymentUrl}}/accounts/{{accountId}}",
+                  "host": [
+                    "{{paymentUrl}}"
+                  ],
+                  "path": [
+                    "accounts",
+                    "{{accountId}}"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Errors",
+          "item": [
+            {
+              "name": "Get unknown order → 404",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{orderUrl}}/orders/does-not-exist",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders",
+                    "does-not-exist"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "More than 10 items → 422",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('422 Unprocessable', () => pm.response.to.have.status(422));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"{{productId}}\", \"quantity\": 11 }]\n}"
+                },
+                "description": "MAX_ITEMS_PER_ORDER (10) counts total quantity."
+              }
+            },
+            {
+              "name": "Product not on this restaurant → 422",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('422 Unprocessable', () => pm.response.to.have.status(422));",
+                      "pm.test('names the product', () => pm.expect(pm.response.json().details.productIds).to.eql(['does-not-exist']));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"does-not-exist\", \"quantity\": 1 }]\n}"
+                }
+              }
+            },
+            {
+              "name": "No items → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": []\n}"
+                }
+              }
+            },
+            {
+              "name": "Zero quantity → 400",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{orderUrl}}/orders",
+                  "host": [
+                    "{{orderUrl}}"
+                  ],
+                  "path": [
+                    "orders"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountId\": \"{{accountId}}\",\n  \"restaurantId\": \"{{restaurantId}}\",\n  \"items\": [{ \"productId\": \"{{productId}}\", \"quantity\": 0 }]\n}"
+                }
               }
             }
           ]

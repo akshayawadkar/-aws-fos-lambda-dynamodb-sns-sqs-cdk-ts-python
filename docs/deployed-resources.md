@@ -16,23 +16,28 @@ What is actually live in AWS, phase by phase. For the planned design of every st
 | 1 | `FosMessaging` | ✅ `UPDATE_COMPLETE` | 2026-11-08 15:23 | 13 | – |
 | 2 | `FosPayment` | ✅ `UPDATE_COMPLETE` | 2026-11-08 15:25 | 30 | `https://jqq85fsgqd.execute-api.us-east-2.amazonaws.com` |
 | 3 | `FosRestaurant` | ✅ `CREATE_COMPLETE` | 2026-11-08 17:15 | 30 | `https://ov5aeaff1b.execute-api.us-east-2.amazonaws.com` |
-| 4 | `FosOrder` | ⏳ not deployed | – | – | – |
+| 4 | `FosOrder` | ✅ `CREATE_COMPLETE` | 2026-11-08 17:29 | 26 | `https://jjdvbcmwsc.execute-api.us-east-2.amazonaws.com` |
 
-> ⚠️ **Action needed: redeploy `FosPayment` and `FosRestaurant`.** Both outbox publisher Lambdas are deployed with the handler `fos_share.outbox_publisher.handler` (missing `d`), so the first event either service writes will fail to import. This is fixed in `infra/infra/components.py`, but the fix isn't deployed yet. See [Known issues](#known-issues).
+All four phases are deployed.
+
+> ⚠️ **Action needed: redeploy `FosPayment` and `FosRestaurant`.** Their outbox publisher Lambdas still run the handler `fos_share.outbox_publisher.handler` (missing `d`). `FosOrder` was deployed after the fix and is correct. Until the other two are redeployed, **every order stops at `PAYMENT_PENDING`**, because `PaymentCompleted` can't be published, and Order's product catalog stays empty, because `ProductChanged` can't be published either. See [Known issues](#known-issues).
 
 ```
-                         ┌──────────────── FosMessaging ────────────────┐
-  FosPayment                                                             FosRestaurant
-  ┌──────────────┐  PaymentCommands ◀── (Order, phase 4)                 ┌──────────────┐
-  │ Commands λ   │◀─────────────────                 RestaurantCommands  │ Commands λ   │
-  │ Api λ ◀ HTTP │                    ──────────────────────────────────▶│ Api λ ◀ HTTP │
-  │ Table ─stream─▶ Outbox λ ─┐                                ┌─ Outbox λ ◀stream─ Table │
-  └──────────────┘            │      ┌──────────────────┐      │         └──────────────┘
-                              └─────▶│ EventBus         │◀─────┘
-                                     └────────┬─────────┘
-                                              │ Rule EventsToOrder (fos.payment, fos.restaurant)
-                                              ▼
-                                         OrderEvents ──▶ (Order, phase 4)
+                           FosOrder  ◀── HTTP  POST /orders, GET /orders/{id}
+                    ┌───────────────────────────────┐
+                    │ Api λ ── order + DebitPayment ─▶ Table ─stream─▶ Outbox λ ──┐ commands
+                    │ Orchestrator λ ◀── OrderEvents │                          │
+                    └────────────▲──────────────────┘                          │
+                                 │                        ┌────────────────────┴───────────┐
+                                 │                        ▼                                ▼
+                        ┌────────┴────────┐       PaymentCommands                 RestaurantCommands
+                        │   OrderEvents   │               │                                │
+                        └────────▲────────┘               ▼                                ▼
+                                 │ Rule EventsToOrder   FosPayment                     FosRestaurant
+                                 │ (fos.payment,        Commands λ ─▶ Table            Commands λ ─▶ Table
+                        ┌────────┴─────────┐                  │stream                          │stream
+                        │ EventBus (FOS)   │◀── Outbox λ ◀────┘          Outbox λ ◀─────────────┘
+                        └──────────────────┘◀──────────────────────────────┘   (also ProductChanged from the API)
 ```
 
 ---
@@ -41,7 +46,7 @@ What is actually live in AWS, phase by phase. For the planned design of every st
 
 The shared messaging layer: the event bus and the three command/event queues. It has no compute and no data.
 
-The stack was destroyed and re-created on 2026-11-08, so every physical name below differs from the first deployment on 2026-11-07. It was updated at 17:15 UTC to publish outputs for the service stacks (see [Cross-stack references](#cross-stack-references)).
+The stack was destroyed and re-created on 2026-11-08, so every physical name below differs from the first deployment on 2026-11-07. It was updated at 17:15 and 17:28 UTC to publish outputs for the service stacks (see [Cross-stack references](#cross-stack-references)).
 
 ### Resources (13)
 
@@ -80,14 +85,14 @@ All six use SSE-SQS encryption, standard (not FIFO) ordering and a 1 MiB max mes
 
 | Queue | Producer → consumer | Visibility timeout | Retention | Redrive |
 |---|---|---|---|---|
-| `PaymentCommands` | Order (phase 4) → **FosPayment Commands λ** | 180 s (6 × 30 s Lambda timeout) | 4 days | → `PaymentCommandsDlq` after 5 receives |
+| `PaymentCommands` | FosOrder Outbox λ → **FosPayment Commands λ** | 180 s (6 × 30 s Lambda timeout) | 4 days | → `PaymentCommandsDlq` after 5 receives |
 | `PaymentCommandsDlq` | dead letters | 30 s | 14 days | – |
-| `RestaurantCommands` | Order (phase 4) → **FosRestaurant Commands λ** | 180 s | 4 days | → `RestaurantCommandsDlq` after 5 receives |
+| `RestaurantCommands` | FosOrder Outbox λ → **FosRestaurant Commands λ** | 180 s | 4 days | → `RestaurantCommandsDlq` after 5 receives |
 | `RestaurantCommandsDlq` | dead letters | 30 s | 14 days | – |
-| `OrderEvents` | EventBridge rule → Order (phase 4) | 180 s | 4 days | → `OrderEventsDlq` after 5 receives |
+| `OrderEvents` | EventBridge rule → **FosOrder Orchestrator λ** | 180 s | 4 days | → `OrderEventsDlq` after 5 receives |
 | `OrderEventsDlq` | dead letters | 30 s | 14 days | – |
 
-`OrderEvents` has no consumer yet. Until phase 4, events from Payment and Restaurant pile up there and expire after 4 days.
+Every queue now has a consumer. All nine FOS queues (these six plus the three outbox failure queues) were empty when checked.
 
 **Queue policy** on `OrderEvents`: allows `events.amazonaws.com` to `SendMessage`, `GetQueueAttributes` and `GetQueueUrl`, only when `aws:SourceArn` is the `EventsToOrder` rule.
 
@@ -101,10 +106,13 @@ One per DLQ: `ApproximateNumberOfMessagesVisible` Maximum over 60 s, ≥ 1 for 1
 
 | Output | Value | Used by |
 |---|---|---|
-| `PublishOutputRefEventBus7B8748AA72D03D9D` | `FosMessagingEventBusE07891D3` | both outbox λ (`EVENT_BUS_NAME`) |
-| `PublishOutputFnGetAttEventBus7B8748AAArn0C0C3C6A` | event bus ARN | both outbox λ IAM policies (`events:PutEvents`) |
-| `PublishOutputFnGetAttPaymentCommandsB260C99DArn0A60171E` | `PaymentCommands` ARN | FosPayment event source mapping and IAM policy |
-| `PublishOutputFnGetAttRestaurantCommands1E80532FArn7E769F7C` | `RestaurantCommands` ARN | FosRestaurant event source mapping and IAM policy |
+| `PublishOutputRefEventBus7B8748AA72D03D9D` | `FosMessagingEventBusE07891D3` | all three outbox λ (`EVENT_BUS_NAME`) |
+| `PublishOutputFnGetAttEventBus7B8748AAArn0C0C3C6A` | event bus ARN | all three outbox λ IAM policies (`events:PutEvents`) |
+| `PublishOutputFnGetAttPaymentCommandsB260C99DArn0A60171E` | `PaymentCommands` ARN | FosPayment event source mapping and IAM policy; FosOrder outbox `sqs:SendMessage` |
+| `PublishOutputFnGetAttRestaurantCommands1E80532FArn7E769F7C` | `RestaurantCommands` ARN | FosRestaurant event source mapping and IAM policy; FosOrder outbox `sqs:SendMessage` |
+| `PublishOutputRefPaymentCommandsB260C99DCB380E11` | `PaymentCommands` URL | FosOrder outbox λ (`PAYMENT_COMMANDS_QUEUE_URL`) |
+| `PublishOutputRefRestaurantCommands1E80532F2D17AF9D` | `RestaurantCommands` URL | FosOrder outbox λ (`RESTAURANT_COMMANDS_QUEUE_URL`) |
+| `PublishOutputFnGetAttOrderEvents91E7078AArnB189768C` | `OrderEvents` ARN | FosOrder event source mapping and IAM policy |
 
 The trade-off: nothing stops you from replacing `FosMessaging` while the service stacks still point at the old ARNs. If you destroy and redeploy `FosMessaging` again, redeploy every service stack after it.
 
@@ -264,54 +272,156 @@ Same pattern as Payment: Api and Commands get read/write on this table, Commands
 
 ## Phase 4 – `FosOrder`
 
-_Not deployed yet._
+The saga orchestrator. It accepts orders, drives Payment and Restaurant with commands, and tracks each order to a final status. It is the only service that sends commands, and it reads every event on the bus through `OrderEvents`.
+
+### Resources (26)
+
+Like the other services, minus a commands consumer: one HTTP API with 2 routes, two "worker" Lambdas and an outbox.
+
+| Group | Type | Logical ID | Physical name / ID |
+|---|---|---|---|
+| Data | `AWS::DynamoDB::Table` | `TableCD117FA1` | `FosOrder-TableCD117FA1-4XK552V409QW` |
+| Layer | `AWS::Lambda::LayerVersion` | `SharedLayer27DFABF0` | `SharedLayer27DFABF0:3` |
+| API λ | `AWS::Lambda::Function` | `ApiFunctionCE271BD4` | `FosOrder-ApiFunctionCE271BD4-dB2K1VyAy4rX` |
+| | `AWS::IAM::Role` / `Policy` | `ApiFunctionServiceRole…` | `FosOrder-ApiFunctionServiceRole52B9747B-WiGMUPnYZerX` |
+| | `AWS::Logs::LogGroup` | `ApiFunctionLogGroupB51C7C52` | `/aws/lambda/FosOrder-ApiFunctionCE271BD4-dB2K1VyAy4rX` |
+| Orchestrator λ | `AWS::Lambda::Function` | `Orchestrator6EF1216F` | `FosOrder-Orchestrator6EF1216F-t86gVQfdv41R` |
+| | `AWS::IAM::Role` / `Policy` | `OrchestratorServiceRole…` | `FosOrder-OrchestratorServiceRole19534BDD-ySj6x5hM9Km7` |
+| | `AWS::Logs::LogGroup` | `OrchestratorLogGroup106C61D4` | `/aws/lambda/FosOrder-Orchestrator6EF1216F-t86gVQfdv41R` |
+| | `AWS::Lambda::EventSourceMapping` | `OrchestratorSqsEventSource…` | `b76d2724-e128-4065-95ca-b05762f615ee` |
+| Outbox λ | `AWS::Lambda::Function` | `OutboxFunctionAB2D95BD` | `FosOrder-OutboxFunctionAB2D95BD-NYUIkaO7Udql` |
+| | `AWS::IAM::Role` / `Policy` | `OutboxFunctionServiceRole…` | `FosOrder-OutboxFunctionServiceRole3524289E-75nwSbl9RYnS` |
+| | `AWS::Logs::LogGroup` | `OutboxFunctionLogGroupCD15F1B8` | `/aws/lambda/FosOrder-OutboxFunctionAB2D95BD-NYUIkaO7Udql` |
+| | `AWS::Lambda::EventSourceMapping` | `OutboxFunctionDynamoDBEventSource…` | `b86606f9-8858-4db0-a761-e195d4483d3f` |
+| | `AWS::SQS::Queue` | `OutboxFailureQueueF968CAFD` | `FosOrder-OutboxFailureQueueF968CAFD-r73NxJBEayKv` |
+| | `AWS::CloudWatch::Alarm` | `OutboxFailureQueueAlarmB4029836` | `FosOrder-OutboxFailureQueueAlarmB4029836-mJa69Vi6yNHx` |
+| HTTP API | `AWS::ApiGatewayV2::Api` / `Stage` | `ApiF70053CD` / `ApiDefaultStage…` | `jjdvbcmwsc` / `$default` |
+| | `AWS::ApiGatewayV2::Integration` | `ApiPOSTordersApiIntegration…` | `a7n7o5p` |
+| | `AWS::ApiGatewayV2::Route` × 2 | `ApiPOSTorders…`, `ApiGETordersorderId…` | `uos81t8`, `nogig86` |
+| | `AWS::Lambda::Permission` × 2 | one per route | – |
+| | `AWS::CDK::Metadata` | `CDKMetadata` | – |
+
+### Lambda functions
+
+All three: Python 3.14, arm64, 256 MB, 30 s timeout, layer `SharedLayer27DFABF0:3`.
+
+| Function | Handler | Trigger | Environment |
+|---|---|---|---|
+| Api | `fos_order.api.handler` | HTTP API | `TABLE_NAME`, `MAX_ITEMS_PER_ORDER=10` |
+| Orchestrator | `fos_order.events.handler` | `OrderEvents` queue: batch 10, `ReportBatchItemFailures` | `TABLE_NAME` |
+| Outbox | ✅ `fos_shared.outbox_publisher.handler` | table stream (same settings as the other services) | `EVENT_BUS_NAME`, `PAYMENT_COMMANDS_QUEUE_URL`, `RESTAURANT_COMMANDS_QUEUE_URL` |
+
+This is the only outbox that sends **commands**. Rows whose message type appears in `COMMAND_QUEUE_ENV` (`DebitPayment`, `RefundPayment`, `ConfirmOrder`) go straight to the matching queue, not to the bus.
+
+### DynamoDB table
+
+`FosOrder-TableCD117FA1-4XK552V409QW`: same settings as the other services (on-demand, `NEW_IMAGE` stream, TTL `expiresAt`, destroy on delete), plus one GSI.
+
+| PK | SK | Holds |
+|---|---|---|
+| `ORDER#<orderId>` | `META` | account, restaurant, priced `items`, `totalMinor`, `status`, `version`, timestamps, and `sweepPk`/`sweepSk` while in progress |
+| `ORDER#<orderId>` | `STEP#<000001>` | status history: one row per transition (`status`, `detail`, `messageId`, `at`) |
+| `CATALOG#<restaurantId>` | `PRODUCT#<productId>` | Order's copy of the menu (`name`, `priceMinor`, `version`), kept current from `ProductChanged` |
+| `INBOX#<messageId>` | `META` | processed-event marker, 7-day TTL |
+| `OUTBOX#<messageId>` | `META` | command waiting to be sent, 7-day TTL |
+
+**GSI `ActiveOrders`** (`ACTIVE`): `sweepPk` / `sweepSk`, projection `ALL`. The index is sparse: only non-final orders carry the keys, and they're removed when an order reaches `CONFIRMED`, `FAILED` or `CANCELLED`. It's meant for a sweeper that finds stuck orders, but no sweeper Lambda is deployed yet.
+
+### The saga
+
+Steps run one after another, each committed in one transaction (order update + step row + inbox marker + next command):
+
+```
+POST /orders ──▶ PAYMENT_PENDING ──DebitPayment──▶ Payment
+                   │ PaymentFailed ─────────────────────────────────▶ FAILED
+                   │ PaymentCompleted
+                   ▼
+               RESTAURANT_PENDING ──ConfirmOrder──▶ Restaurant
+                   │ RestaurantConfirmed ───────────────────────────▶ CONFIRMED
+                   │ RestaurantRejected
+                   ▼
+               REFUND_PENDING ──RefundPayment──▶ Payment
+                   │ PaymentRefunded ───────────────────────────────▶ CANCELLED
+```
+
+An event that doesn't fit the order's current status is logged and ignored. That's how duplicates and late events are absorbed. Concurrent events for one order are serialized by the `version` condition: the loser fails and SQS redelivers it.
+
+### HTTP API
+
+No authorizer, CORS, access logs or throttling overrides.
+
+| Route | Does |
+|---|---|
+| `POST /orders` | `{"accountId", "restaurantId", "items": [{"productId", "quantity"}]}` → **202** `{trackingId, status: PAYMENT_PENDING, totalMinor}`. Prices come from the local catalog; 422 if a product isn't on that restaurant's catalog or total quantity > 10; 400 on a malformed body |
+| `GET /orders/{orderId}` | 200 `{trackingId, status, restaurantId, items, totalMinor, createdAt, updatedAt, steps[]}` / 404 |
+
+### Messages
+
+| Direction | Type | Via |
+|---|---|---|
+| out (commands) | `DebitPayment`, `RefundPayment` | outbox → `PaymentCommands` |
+| out (commands) | `ConfirmOrder` | outbox → `RestaurantCommands` |
+| in | `PaymentCompleted`, `PaymentFailed`, `PaymentRefunded`, `RestaurantConfirmed`, `RestaurantRejected`, `ProductChanged` | `OrderEvents` |
+
+### IAM
+
+Api and Orchestrator: read/write on this table (including the GSI). Orchestrator: receive/delete on `OrderEvents`. Outbox: stream read, `events:PutEvents` on the bus, `sqs:SendMessage` on both command queues, and send to its failure queue.
 
 ---
 
 ## Idle cost (all deployed stacks)
 
-About **$0.50/month**: five standard alarms at $0.10 each (3 DLQ alarms and 2 outbox failure alarms). Everything else is pay-per-use and free when idle: on-demand DynamoDB, Lambda, HTTP API, SQS, the custom event bus, and Lambda reading DynamoDB streams. Log groups cost only for what's written.
+About **$0.60/month**: six standard alarms at $0.10 each (3 DLQ alarms and 3 outbox failure alarms). Everything else is pay-per-use and free when idle: on-demand DynamoDB (including the GSI), Lambda, the three HTTP APIs, SQS, the custom event bus, and Lambda reading DynamoDB streams. Log groups cost only for what's written. A full order costs a few dozen requests in total, well under a cent.
 
 ## Known issues
 
-1. **Outbox handler typo (blocks all events).** Both outbox Lambdas run `fos_share.outbox_publisher.handler`. The first `OUTBOX#` row (a product create or update, or any processed command) will fail with `Runtime.ImportModuleError`, retry 10 times, and land in the outbox failure queue (alarm → `ALARM`). Fixed in `infra/infra/components.py:176`. Deploy with:
+1. **Outbox handler typo in FosPayment and FosRestaurant (blocks the saga).** Their outbox Lambdas run `fos_share.outbox_publisher.handler`. `FosOrder`'s outbox is already correct. The effect:
+   - `POST /orders` returns 422 for every product, because Order's catalog is empty: no `ProductChanged` has ever been published.
+   - Any order that does get created stops at `PAYMENT_PENDING`. Payment debits the account, but `PaymentCompleted` fails to publish.
+
+   Fixed in `infra/infra/components.py:176`. Deploy with:
    ```powershell
    cdk deploy FosPayment FosRestaurant
    ```
-   Do this before creating products, or those `ProductChanged` events will need republishing.
-2. **Payment unit tests are stale.** `services/payment/tests` targets an earlier API (`store.py`, `ownerName`) and fails at collection.
-3. **APIs are public.** No auth, no throttling and no CORS. Fine for learning, but anyone with the URL can create accounts and credit them.
-4. **Carried over from Phase 1:** alarms have no actions, the bus→`OrderEvents` rule target has no DLQ, and the bus has no archive.
+   Products created before the redeploy never reached Order's catalog. Create new ones, or update existing ones (any PATCH publishes a fresh `ProductChanged`).
+2. **Order's catalog only knows products changed since Order was deployed.** It's built from events, not backfilled. This is expected for this design, but worth knowing when testing.
+3. **No sweeper.** The `ActiveOrders` index tracks in-progress orders, but nothing reads it yet, so an order stuck by a lost message stays stuck.
+4. **Payment unit tests are stale.** `services/payment/tests` targets an earlier API (`store.py`, `ownerName`) and fails at collection.
+5. **APIs are public.** No auth, no throttling and no CORS. Fine for learning, but anyone with the URL can create accounts, credit them and place orders.
+6. **Carried over from Phase 1:** alarms have no actions, the bus→`OrderEvents` rule target has no DLQ, and the bus has no archive.
 
 ## Verify it yourself
 
 ```powershell
 $R = "us-east-2"
 aws cloudformation list-stack-resources --stack-name FosPayment --region $R --output table
-aws lambda get-function-configuration --function-name FosPayment-OutboxFunctionAB2D95BD-biKGrE6M20sJ --region $R --query Handler
+# Should print fos_shared.outbox_publisher.handler for all three
+"FosPayment-OutboxFunctionAB2D95BD-biKGrE6M20sJ", "FosRestaurant-OutboxFunctionAB2D95BD-9hmTojWMS2t1", "FosOrder-OutboxFunctionAB2D95BD-NYUIkaO7Udql" |
+  ForEach-Object { aws lambda get-function-configuration --function-name $_ --region $R --query Handler }
+
+# Orders still in progress (the sparse ActiveOrders index)
+aws dynamodb query --table-name FosOrder-TableCD117FA1-4XK552V409QW --index-name ActiveOrders --region $R `
+  --key-condition-expression "sweepPk = :p" --expression-attribute-values '{\":p\":{\"S\":\"ACTIVE\"}}'
 
 # Tail a function's logs
 aws logs tail /aws/lambda/FosPayment-Commands361DBF70-PNkquJkpEyh0 --region $R --since 10m --follow
 ```
 
-**End-to-end smoke test** (after the redeploy): send a `DebitPayment` command straight to the queue and watch the result arrive in `OrderEvents`.
+**End-to-end test** (after the redeploy): run the **Order (end-to-end saga)** folder of the Postman collection with the Collection Runner. It creates an account, restaurant and product, then runs three orders:
+
+| Scenario | Expected steps | Balance after |
+|---|---|---|
+| 2 × 1450 | `PAYMENT_PENDING → RESTAURANT_PENDING → CONFIRMED` | 5000 → 2100 |
+| product unavailable | `PAYMENT_PENDING → RESTAURANT_PENDING → REFUND_PENDING → CANCELLED` | 2100 (debited, then refunded) |
+| 10 × 1450 | `PAYMENT_PENDING → FAILED` (`INSUFFICIENT_FUNDS`) | 2100 |
+
+If an order hangs, find where it stopped from its correlation ID (the order ID) across the logs:
 
 ```powershell
-# 1. Create and fund an account with the Postman collection, then put its id here:
-$accountId = "<accountId>"
-$cmd = @{
-  messageId = [guid]::NewGuid().ToString(); type = "DebitPayment"; schemaVersion = 1
-  occurredAt = (Get-Date).ToUniversalTime().ToString("o"); correlationId = "order-smoke-1"
-  causationId = $null; source = "fos.order"
-  data = @{ orderId = "order-smoke-1"; accountId = $accountId; amountMinor = 1200; currency = "USD" }
-} | ConvertTo-Json -Compress
-$cmd | Out-File -Encoding ascii debit.json
-
-# 2. Send it to PaymentCommands
-aws sqs send-message --region $R --queue-url https://sqs.us-east-2.amazonaws.com/627626160133/FosMessaging-PaymentCommandsB260C99D-vadsNJLQ8bNO --message-body file://debit.json
-
-# 3. A PaymentCompleted event should arrive in OrderEvents (nothing consumes it until phase 4)
-aws sqs receive-message --region $R --wait-time-seconds 10 --queue-url https://sqs.us-east-2.amazonaws.com/627626160133/FosMessaging-OrderEvents91E7078A-Getq0gVhVdW3
+$order = "<trackingId>"
+foreach ($fn in "FosOrder-Orchestrator6EF1216F-t86gVQfdv41R", "FosOrder-OutboxFunctionAB2D95BD-NYUIkaO7Udql",
+                "FosPayment-Commands361DBF70-PNkquJkpEyh0", "FosPayment-OutboxFunctionAB2D95BD-biKGrE6M20sJ",
+                "FosRestaurant-Commands361DBF70-ggqajG1PkfDo", "FosRestaurant-OutboxFunctionAB2D95BD-9hmTojWMS2t1") {
+  "== $fn"; aws logs tail /aws/lambda/$fn --region $R --since 30m --filter-pattern "`"$order`""
+}
 ```
-
-The account's ledger (`GET /accounts/{accountId}/ledger`) should now show a `DEBIT` of 1200 for `order-smoke-1`.
