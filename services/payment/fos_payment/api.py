@@ -1,80 +1,129 @@
-"""HTTP API for accounts. Bodies and responses are camelCase; amounts are integer minor units."""
 from typing import Annotated, Any
+from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from pydantic import Field
+from ulid import ULID
 
-from fos_shared.contracts import Id, Model, PositiveInt
-from fos_shared.dynamo import condition_failed_indexes, now_iso, transact
+from fos_shared.contracts import Model, PositiveInt
+from fos_shared.dynamo import client, condition_failed_indexes, now_iso, table_name, transact
 from fos_shared.http import ApiEvent, HttpError, api_handler, parse_body, path_param
-
-from . import store
+from .keys import account_key, ledger_entry
 
 
 class CreateAccountBody(Model):
-    owner_name: Id
-    opening_balance_minor: Annotated[int, Field(ge=0, strict=True)] = 0
+    name: Annotated[str, Field(min_length=1)]
 
 
 class CreditBody(Model):
     amount_minor: PositiveInt
+    # Lets a client safely retry a top-up without crediting the account twice.
+    reference_id: Annotated[str, Field(min_length=1)]
 
 
-def _existing(account_id: str) -> dict[str, Any]:
-    account = store.get_account(account_id)
-    if account is None:
-        raise HttpError(404, f"Account {account_id} not found")
-    return account
+def _without_keys(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if key not in ("PK", "SK")}
 
 
 def create_account(event: ApiEvent) -> tuple[int, Any]:
     body = parse_body(event, CreateAccountBody)
-    account = {
-        "accountId": store.new_entry_id(),
-        "ownerName": body.owner_name,
-        "status": "ACTIVE",
+    account_id = str(uuid4())
+    now = now_iso()
+    item = {
+        **account_key(account_id),
+        "accountId": account_id,
+        "name": body.name,
+        "balanceMinor": 0,
         "currency": "USD",
-        "balanceMinor": body.opening_balance_minor,
-        "createdAt": now_iso(),
+        "status": "ACTIVE",
+        "createdAt": now,
+        "updatedAt": now,
     }
-    items = [store.account_put(account)]
-    if body.opening_balance_minor:
-        items.append(store.ledger_put(account["accountId"], store.new_entry_id(), "OPENING",
-                                      body.opening_balance_minor))
-    transact(items)
-    return 201, account
+    client().put_item(TableName=table_name(), Item=item)
+    return 201, _without_keys(item)
 
 
 def get_account(event: ApiEvent) -> tuple[int, Any]:
-    return 200, _existing(path_param(event, "accountId"))
+    account_id = path_param(event, "accountId")
+    item = client().get_item(
+        TableName=table_name(), Key=account_key(account_id), ConsistentRead=True
+    ).get("Item")
+    if item is None:
+        raise HttpError(404, "Account not found")
+    return 200, _without_keys(item)
 
 
-def credit(event: ApiEvent) -> tuple[int, Any]:
+def credit_account(event: ApiEvent) -> tuple[int, Any]:
+    table = table_name()
     account_id = path_param(event, "accountId")
     body = parse_body(event, CreditBody)
+    entry_id = str(ULID())
+    now = now_iso()
     try:
-        transact([
-            store.balance_change(account_id, body.amount_minor),
-            store.ledger_put(account_id, store.new_entry_id(), "CREDIT", body.amount_minor),
-        ])
+        transact(
+            [
+                {
+                    "Put": {
+                        "TableName": table,
+                        "Item": {
+                            "PK": f"ACCOUNT#{account_id}",
+                            "SK": f"CREDITREF#{body.reference_id}",
+                            "entryId": entry_id,
+                            "createdAt": now,
+                        },
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+                {
+                    "Update": {
+                        "TableName": table,
+                        "Key": account_key(account_id),
+                        "UpdateExpression": "SET balanceMinor = balanceMinor + :amount, updatedAt = :now",
+                        "ConditionExpression": "attribute_exists(PK)",
+                        "ExpressionAttributeValues": {":amount": body.amount_minor, ":now": now},
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": table,
+                        "Item": ledger_entry(account_id, entry_id, "CREDIT", body.amount_minor, now),
+                    }
+                },
+            ]
+        )
     except ClientError as err:
-        if condition_failed_indexes(err) == [0]:
-            raise HttpError(404, f"Account {account_id} not found") from err
-        raise
-    return 200, _existing(account_id)
+        failed = condition_failed_indexes(err)
+        if failed is None:
+            raise
+        if 1 in failed:
+            raise HttpError(404, "Account not found") from err
+        return 200, {"accountId": account_id, "referenceId": body.reference_id, "duplicate": True}
+    return 201, {
+        "accountId": account_id,
+        "referenceId": body.reference_id,
+        "entryId": entry_id,
+        "amountMinor": body.amount_minor,
+        "duplicate": False,
+    }
 
 
-def ledger(event: ApiEvent) -> tuple[int, Any]:
+def get_ledger(event: ApiEvent) -> tuple[int, Any]:
     account_id = path_param(event, "accountId")
-    _existing(account_id)
-    return 200, {"accountId": account_id, "entries": store.list_ledger(account_id)}
+    items = client().query(
+        TableName=table_name(),
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+        ExpressionAttributeValues={":pk": f"ACCOUNT#{account_id}", ":prefix": "LEDGER#"},
+        ScanIndexForward=False,
+        Limit=50,
+    ).get("Items", [])
+    return 200, {"accountId": account_id, "entries": [_without_keys(item) for item in items]}
 
 
 handler = api_handler(
     {
         "POST /accounts": create_account,
         "GET /accounts/{accountId}": get_account,
-        "POST /accounts/{accountId}/credit": credit,
-        "GET /accounts/{accountId}/ledger": ledger,
+        "POST /accounts/{accountId}/credit": credit_account,
+        "GET /accounts/{accountId}/ledger": get_ledger,
     }
 )

@@ -1,18 +1,9 @@
-"""Handles DebitPayment and RefundPayment from the PaymentCommands queue.
-
-    DebitPayment   -> PaymentCompleted | PaymentFailed
-    RefundPayment  -> PaymentRefunded
-
-Every result is written to the outbox in the same transaction as the state change and the
-inbox marker, so a redelivered command changes nothing and publishes nothing.
-"""
 from botocore.exceptions import ClientError
-from pydantic import BaseModel
+from ulid import ULID
 
 from fos_shared.contracts import (
     SOURCE_PAYMENT,
     DebitPayment,
-    Envelope,
     Message,
     PaymentCompleted,
     PaymentCompletedData,
@@ -24,111 +15,254 @@ from fos_shared.contracts import (
     RefundPayment,
     new_message,
 )
-from fos_shared.dynamo import TransactItem, condition_failed_indexes, inbox_put, outbox_put, table_name, transact
+from fos_shared.dynamo import (
+    TransactItem,
+    client,
+    condition_failed_indexes,
+    inbox_put,
+    now_iso,
+    outbox_put,
+    plain,
+    table_name,
+    transact,
+)
 from fos_shared.log import log
 from fos_shared.sqs import sqs_handler
-
-from . import store
-
-
-class Conflict(Exception):
-    """A concurrent write changed the state this command read. SQS redelivers it and it runs again."""
+from .keys import account_key, debit_key, ledger_entry, refund_key
 
 
-def _reply(command: Envelope, event_type: type[Envelope], data: BaseModel, changes: list[TransactItem]) -> None:
-    """Commits `changes` with the inbox marker and the resulting event. The inbox marker is item 0."""
-    event = new_message(event_type, source=SOURCE_PAYMENT, correlation_id=command.correlation_id,
-                        causation_id=command.message_id, data=data)
-    items = [inbox_put(table_name(), command.message_id), *changes, outbox_put(table_name(), event)]
+def _debit_failure_reason(table: str, account_id: str, amount_minor: int) -> PaymentFailureReason:
+    """Works out why the balance update's condition failed."""
+    account = client().get_item(
+        TableName=table, Key=account_key(account_id), ConsistentRead=True
+    ).get("Item")
+    if account is None:
+        return "ACCOUNT_NOT_FOUND"
+    if account["status"] != "ACTIVE":
+        return "ACCOUNT_INACTIVE"
+    if account["balanceMinor"] < amount_minor:
+        return "INSUFFICIENT_FUNDS"
+    # The balance changed since the transaction ran, so let SQS retry it.
+    raise RuntimeError(f"Debit condition failed but account {account_id} can now cover it")
+
+
+def _record_debit_failure(table: str, command: DebitPayment, reason: PaymentFailureReason) -> None:
+    data = command.data
+    event = new_message(
+        PaymentFailed,
+        source=SOURCE_PAYMENT,
+        correlation_id=data.order_id,
+        causation_id=command.message_id,
+        data=PaymentFailedData(order_id=data.order_id, reason=reason),
+    )
+    try:
+        transact(
+            [
+                inbox_put(table, command.message_id),
+                {
+                    "Put": {
+                        "TableName": table,
+                        "Item": {
+                            **debit_key(data.order_id),
+                            "status": "FAILED",
+                            "reason": reason,
+                            "accountId": data.account_id,
+                            "amountMinor": data.amount_minor,
+                            "createdAt": now_iso(),
+                        },
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+                outbox_put(table, event),
+            ]
+        )
+    except ClientError as err:
+        if condition_failed_indexes(err) is None:
+            raise
+        log("info", "Duplicate debit failure ignored", correlationId=data.order_id)
+
+
+def handle_debit(command: DebitPayment) -> None:
+    table = table_name()
+    data = command.data
+    entry_id = str(ULID())
+    now = now_iso()
+    event = new_message(
+        PaymentCompleted,
+        source=SOURCE_PAYMENT,
+        correlation_id=data.order_id,
+        causation_id=command.message_id,
+        data=PaymentCompletedData(order_id=data.order_id, ledger_entry_id=entry_id),
+    )
+
+    items: list[TransactItem] = [
+        inbox_put(table, command.message_id),
+        {
+            "Put": {
+                "TableName": table,
+                "Item": {
+                    **debit_key(data.order_id),
+                    "status": "COMPLETED",
+                    "accountId": data.account_id,
+                    "amountMinor": data.amount_minor,
+                    "ledgerEntryId": entry_id,
+                    "createdAt": now,
+                },
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        },
+        # A refund marker means this order was already given up on, so the debit must not go through.
+        {
+            "ConditionCheck": {
+                "TableName": table,
+                "Key": refund_key(data.order_id),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        },
+        {
+            "Update": {
+                "TableName": table,
+                "Key": account_key(data.account_id),
+                "UpdateExpression": "SET balanceMinor = balanceMinor - :amount, updatedAt = :now",
+                "ConditionExpression": (
+                    "attribute_exists(PK) AND #status = :active AND balanceMinor >= :amount"
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": {
+                    ":amount": data.amount_minor,
+                    ":active": "ACTIVE",
+                    ":now": now,
+                },
+            }
+        },
+        {
+            "Put": {
+                "TableName": table,
+                "Item": ledger_entry(
+                    data.account_id, entry_id, "DEBIT", data.amount_minor, now, data.order_id
+                ),
+            }
+        },
+        outbox_put(table, event),
+    ]
+
     try:
         transact(items)
     except ClientError as err:
         failed = condition_failed_indexes(err)
-        if failed and 0 in failed:
-            log("info", "Duplicate command ignored", messageId=command.message_id,
-                correlationId=command.correlation_id)
+        if failed is None:
+            raise
+        if 0 in failed or 1 in failed:
+            log("info", "Duplicate debit ignored", correlationId=data.order_id)
             return
-        if failed:
-            raise Conflict(f"{command.type} conflicted on transaction items {failed}") from err
-        raise
-    log("info", f"{command.type} -> {event_type.__name__}", orderId=getattr(data, "order_id", None),
-        correlationId=command.correlation_id)
+        reason: PaymentFailureReason = (
+            "REFUNDED_BEFORE_DEBIT"
+            if 2 in failed
+            else _debit_failure_reason(table, data.account_id, data.amount_minor)
+        )
+        _record_debit_failure(table, command, reason)
 
 
-def _fail(command: DebitPayment, reason: PaymentFailureReason) -> None:
-    _reply(command, PaymentFailed, PaymentFailedData(order_id=command.data.order_id, reason=reason), [])
+def handle_refund(command: RefundPayment) -> None:
+    table = table_name()
+    order_id = command.data.order_id
+    now = now_iso()
 
+    debit = client().get_item(
+        TableName=table, Key=debit_key(order_id), ConsistentRead=True
+    ).get("Item")
+    completed = debit is not None and debit["status"] == "COMPLETED"
+    entry_id = str(ULID()) if completed else None
+    event = new_message(
+        PaymentRefunded,
+        source=SOURCE_PAYMENT,
+        correlation_id=order_id,
+        causation_id=command.message_id,
+        data=PaymentRefundedData(order_id=order_id, ledger_entry_id=entry_id),
+    )
 
-def debit(command: DebitPayment) -> None:
-    data = command.data
-    entry_id = store.new_entry_id()
-    changes = [
-        store.payment_put({"orderId": data.order_id, "accountId": data.account_id, "status": "DEBITED",
-                           "amountMinor": data.amount_minor, "debitEntryId": entry_id}),
-        store.balance_change(data.account_id, -data.amount_minor, require_active=True),
-        store.ledger_put(data.account_id, entry_id, "DEBIT", data.amount_minor, data.order_id),
+    items: list[TransactItem] = [
+        inbox_put(table, command.message_id),
+        {
+            "Put": {
+                "TableName": table,
+                "Item": {
+                    **refund_key(order_id),
+                    "status": "REFUNDED" if completed else "NOTHING_TO_REFUND",
+                    "reason": command.data.reason,
+                    "ledgerEntryId": entry_id,
+                    "createdAt": now,
+                },
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        },
     ]
+
+    if debit is not None and entry_id is not None:
+        # Refund what was actually debited, not what the command claims.
+        account_id = str(debit["accountId"])
+        amount_minor = int(plain(debit["amountMinor"]))
+        items += [
+            {
+                "Update": {
+                    "TableName": table,
+                    "Key": account_key(account_id),
+                    "UpdateExpression": "SET balanceMinor = balanceMinor + :amount, updatedAt = :now",
+                    "ExpressionAttributeValues": {":amount": amount_minor, ":now": now},
+                }
+            },
+            {
+                "Put": {
+                    "TableName": table,
+                    "Item": ledger_entry(account_id, entry_id, "CREDIT", amount_minor, now, order_id),
+                }
+            },
+        ]
+    elif debit is not None:
+        # Guards against the failed debit record changing after the read above.
+        items.append(
+            {
+                "ConditionCheck": {
+                    "TableName": table,
+                    "Key": debit_key(order_id),
+                    "ConditionExpression": "#status = :failed",
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": {":failed": "FAILED"},
+                }
+            }
+        )
+    else:
+        # Guards against a debit landing between the read above and this write.
+        items.append(
+            {
+                "ConditionCheck": {
+                    "TableName": table,
+                    "Key": debit_key(order_id),
+                    "ConditionExpression": "attribute_not_exists(PK)",
+                }
+            }
+        )
+    items.append(outbox_put(table, event))
+
     try:
-        _reply(command, PaymentCompleted, PaymentCompletedData(order_id=data.order_id, ledger_entry_id=entry_id),
-               changes)
-        return
-    except Conflict:
-        pass  # Work out why from the current state.
-
-    payment = store.get_payment(data.order_id)
-    if payment is not None:
-        if payment["status"] == "REFUNDED":
-            _fail(command, "REFUNDED_BEFORE_DEBIT")
-        else:
-            # The order was already debited by an earlier command: report that debit again.
-            _reply(command, PaymentCompleted,
-                   PaymentCompletedData(order_id=data.order_id, ledger_entry_id=payment["debitEntryId"]), [])
-        return
-
-    account = store.get_account(data.account_id)
-    if account is None:
-        _fail(command, "ACCOUNT_NOT_FOUND")
-    elif account["status"] != "ACTIVE":
-        _fail(command, "ACCOUNT_INACTIVE")
-    elif account["balanceMinor"] < data.amount_minor:
-        _fail(command, "INSUFFICIENT_FUNDS")
-    else:
-        raise Conflict(f"Debit for order {data.order_id} failed but the account now allows it; retrying")
+        transact(items)
+    except ClientError as err:
+        failed = condition_failed_indexes(err)
+        if failed is None:
+            raise
+        if 0 in failed or 1 in failed:
+            log("info", "Duplicate refund ignored", correlationId=order_id)
+            return
+        raise RuntimeError(f"Debit for order {order_id} changed during refund; retrying") from err
 
 
-def refund(command: RefundPayment) -> None:
-    data = command.data
-    payment = store.get_payment(data.order_id)
-
-    if payment is None:
-        # Refund overtook its debit: leave a marker so the debit fails with REFUNDED_BEFORE_DEBIT.
-        marker = store.payment_put({"orderId": data.order_id, "accountId": data.account_id, "status": "REFUNDED",
-                                    "amountMinor": 0})
-        _reply(command, PaymentRefunded, PaymentRefundedData(order_id=data.order_id, ledger_entry_id=None), [marker])
-    elif payment["status"] == "REFUNDED":
-        _reply(command, PaymentRefunded,
-               PaymentRefundedData(order_id=data.order_id, ledger_entry_id=payment.get("refundEntryId")), [])
-    else:
-        # Give back what was actually debited, whatever the command says.
-        amount = payment["amountMinor"]
-        if amount != data.amount_minor:
-            log("warning", "Refund amount differs from debit; refunding the debit", orderId=data.order_id,
-                requested=data.amount_minor, debited=amount, correlationId=command.correlation_id)
-        entry_id = store.new_entry_id()
-        _reply(command, PaymentRefunded, PaymentRefundedData(order_id=data.order_id, ledger_entry_id=entry_id), [
-            store.payment_mark_refunded(data.order_id, entry_id),
-            store.balance_change(payment["accountId"], amount),
-            store.ledger_put(payment["accountId"], entry_id, "REFUND", amount, data.order_id),
-        ])
-
-
-def handle(message: Message) -> None:
+def _handle(message: Message) -> None:
     if isinstance(message, DebitPayment):
-        debit(message)
+        handle_debit(message)
     elif isinstance(message, RefundPayment):
-        refund(message)
+        handle_refund(message)
     else:
-        raise ValueError(f"Payment service does not handle {message.type}")
+        raise ValueError(f"Payment service can't handle {message.type}")
 
 
-handler = sqs_handler(handle)
+handler = sqs_handler(_handle)

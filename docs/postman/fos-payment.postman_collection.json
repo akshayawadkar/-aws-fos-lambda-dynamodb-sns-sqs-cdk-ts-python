@@ -1,0 +1,276 @@
+{
+  "info": {
+    "name": "FOS – Payment API",
+    "description": "Payment service HTTP API (FosPayment stack, us-east-2).\n\nRun the requests in order, or use the Collection Runner. **Create account** saves `accountId`, and **Credit account** saves `referenceId`, so later requests reuse them.\n\nAmounts are integer minor units (cents): 5000 = $50.00.\n\nSet `baseUrl` to the stack's `ApiUrl` output:\n`aws cloudformation describe-stacks --stack-name FosPayment --region us-east-2 --query \"Stacks[0].Outputs\"`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://jqq85fsgqd.execute-api.us-east-2.amazonaws.com" },
+    { "key": "accountId", "value": "" },
+    { "key": "referenceId", "value": "" },
+    { "key": "creditAmount", "value": "5000" }
+  ],
+  "item": [
+    {
+      "name": "Accounts",
+      "item": [
+        {
+          "name": "Create account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('starts ACTIVE with zero USD balance', () => {",
+                  "    pm.expect(body.status).to.eql('ACTIVE');",
+                  "    pm.expect(body.balanceMinor).to.eql(0);",
+                  "    pm.expect(body.currency).to.eql('USD');",
+                  "});",
+                  "pm.collectionVariables.set('accountId', body.accountId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Ada Lovelace\"\n}" },
+            "url": { "raw": "{{baseUrl}}/accounts", "host": ["{{baseUrl}}"], "path": ["accounts"] },
+            "description": "Creates an ACTIVE USD account with a balance of 0. Saves `accountId` for the requests below."
+          }
+        },
+        {
+          "name": "Get account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('returns the saved account', () => pm.expect(pm.response.json().accountId).to.eql(pm.collectionVariables.get('accountId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}"]
+            },
+            "description": "Strongly consistent read of the account and its current `balanceMinor`."
+          }
+        },
+        {
+          "name": "Credit account",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh referenceId per run. 'Credit account (duplicate)' reuses it.",
+                  "pm.collectionVariables.set('referenceId', 'topup-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('not a duplicate, with a ledger entry', () => {",
+                  "    pm.expect(body.duplicate).to.eql(false);",
+                  "    pm.expect(body.entryId).to.be.a('string');",
+                  "    pm.expect(body.amountMinor).to.eql(Number(pm.collectionVariables.get('creditAmount')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountMinor\": {{creditAmount}},\n  \"referenceId\": \"{{referenceId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/credit",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}", "credit"]
+            },
+            "description": "Tops up the account. `referenceId` makes it safe to retry: the same reference is applied only once."
+          }
+        },
+        {
+          "name": "Credit account (duplicate referenceId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, flagged as duplicate', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().duplicate).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amountMinor\": {{creditAmount}},\n  \"referenceId\": \"{{referenceId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/credit",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}", "credit"]
+            },
+            "description": "Replays the previous top-up. Expect `duplicate: true`, and the balance stays the same."
+          }
+        },
+        {
+          "name": "Get account (balance after credit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('credited exactly once', () => pm.expect(pm.response.json().balanceMinor).to.eql(Number(pm.collectionVariables.get('creditAmount'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}"]
+            }
+          }
+        },
+        {
+          "name": "Get ledger",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('one CREDIT entry', () => {",
+                  "    const credits = pm.response.json().entries.filter(e => e.type === 'CREDIT');",
+                  "    pm.expect(credits).to.have.lengthOf(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/ledger",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}", "ledger"]
+            },
+            "description": "Up to 50 ledger entries, newest first."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error cases",
+      "item": [
+        {
+          "name": "Get unknown account → 404",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/accounts/does-not-exist", "host": ["{{baseUrl}}"], "path": ["accounts", "does-not-exist"] }
+          }
+        },
+        {
+          "name": "Credit unknown account → 404",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amountMinor\": 100,\n  \"referenceId\": \"{{$guid}}\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/accounts/does-not-exist/credit",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "does-not-exist", "credit"]
+            }
+          }
+        },
+        {
+          "name": "Create account with empty name → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"\"\n}" },
+            "url": { "raw": "{{baseUrl}}/accounts", "host": ["{{baseUrl}}"], "path": ["accounts"] }
+          }
+        },
+        {
+          "name": "Credit with negative amount → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amountMinor\": -100,\n  \"referenceId\": \"{{$guid}}\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/credit",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}", "credit"]
+            }
+          }
+        },
+        {
+          "name": "Credit with invalid JSON → 400",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ not json" },
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{accountId}}/credit",
+              "host": ["{{baseUrl}}"],
+              "path": ["accounts", "{{accountId}}", "credit"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
