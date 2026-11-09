@@ -7,20 +7,18 @@ What is actually live in AWS, phase by phase. For the planned design of every st
 | Account | `627626160133` |
 | Region | `us-east-2` (Ohio) |
 | Prerequisite | `CDKToolkit` bootstrap stack: `CREATE_COMPLETE` |
-| Last checked | 2026-11-08 |
+| Last checked | 2026-11-09 |
 
 ## Deployment progress
 
 | Phase | Stack | Status | Created (UTC) | Resources | API |
 |---|---|---|---|---|---|
 | 1 | `FosMessaging` | ✅ `UPDATE_COMPLETE` | 2026-11-08 15:23 | 13 | – |
-| 2 | `FosPayment` | ✅ `UPDATE_COMPLETE` | 2026-11-08 15:25 | 30 | `https://jqq85fsgqd.execute-api.us-east-2.amazonaws.com` |
-| 3 | `FosRestaurant` | ✅ `CREATE_COMPLETE` | 2026-11-08 17:15 | 30 | `https://ov5aeaff1b.execute-api.us-east-2.amazonaws.com` |
-| 4 | `FosOrder` | ✅ `CREATE_COMPLETE` | 2026-11-08 17:29 | 26 | `https://jjdvbcmwsc.execute-api.us-east-2.amazonaws.com` |
+| 2 | `FosPayment` | ⛔ `DELETE_COMPLETE` (2026-11-08 21:09) | – | – | was `https://jqq85fsgqd.execute-api.us-east-2.amazonaws.com` |
+| 3 | `FosRestaurant` | ⛔ `DELETE_COMPLETE` (2026-11-08 21:10) | – | – | was `https://ov5aeaff1b.execute-api.us-east-2.amazonaws.com` |
+| 4 | `FosOrder` | ⏸️ `REVIEW_IN_PROGRESS`: change set created 2026-11-09 12:33 but not executed (the previous stack was deleted 2026-11-08 21:11) | – | – | was `https://jjdvbcmwsc.execute-api.us-east-2.amazonaws.com` |
 
-All four phases are deployed.
-
-> ⚠️ **Action needed: redeploy `FosPayment` and `FosRestaurant`.** Their outbox publisher Lambdas still run the handler `fos_share.outbox_publisher.handler` (missing `d`). `FosOrder` was deployed after the fix and is correct. Until the other two are redeployed, **every order stops at `PAYMENT_PENDING`**, because `PaymentCompleted` can't be published, and Order's product catalog stays empty, because `ProductChanged` can't be published either. See [Known issues](#known-issues).
+> ⚠️ **Only `FosMessaging` is live.** The Phase 2–4 sections below describe the stacks as they were on 2026-11-08, before they were deleted. Physical names and API URLs will change on the next deploy. The redeploy also fixes the outbox handler typo. See [gaps.md](gaps.md) #1.
 
 ```
                            FosOrder  ◀── HTTP  POST /orders, GET /orders/{id}
